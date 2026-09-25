@@ -1,0 +1,126 @@
+//@version=5
+// ============================================================================
+//  UT Bot + 平均線(25/75/200) + 前日/当日 高値・安値 + 水平線
+//   - UT Bot: ATR トレーリングストップ。終値がストップを上抜け=Buy / 下抜け=Sell
+//   - 平均線: 25 / 75 / 200 (SMA / EMA 切替)
+//   - 高値・安値: 前日・当日 (UTC日。日の起点は変更可)
+//   - 水平線: 任意の価格を最大3本 (0 = 非表示)
+//   - アラート: UT Buy/Sell, 前日高値/安値ブレイク
+// ============================================================================
+indicator("UT Bot + MA + H/L + 水平線", overlay=true, max_labels_count=500, max_lines_count=50)
+
+// ---------------- Inputs ----------------
+gU = "UT Bot"
+keyValue = input.float(1.0, "Key Value (感度: 小さいほど敏感)", step=0.1, minval=0.1, group=gU)
+atrLen   = input.int(10, "ATR 期間", minval=1, group=gU)
+useHA    = input.bool(false, "平均足(Heikin Ashi)の終値を使う", group=gU)
+showUT   = input.bool(true, "トレーリングストップ線を描画", group=gU)
+barCol   = input.bool(false, "ローソク足を UT の方向で色分け", group=gU)
+
+gM = "平均線"
+maType = input.string("SMA", "種類", options=["SMA", "EMA"], group=gM)
+len1   = input.int(25,  "MA1", minval=1, inline="m1", group=gM)
+show1  = input.bool(true, "", inline="m1", group=gM)
+len2   = input.int(75,  "MA2", minval=1, inline="m2", group=gM)
+show2  = input.bool(true, "", inline="m2", group=gM)
+len3   = input.int(200, "MA3", minval=1, inline="m3", group=gM)
+show3  = input.bool(true, "", inline="m3", group=gM)
+
+gH = "高値・安値"
+showPD      = input.bool(true, "前日高値/安値", group=gH)
+showCD      = input.bool(true, "当日高値/安値 (形成中)", group=gH)
+showLbl     = input.bool(true, "価格ラベルを表示", group=gH)
+dayStartUTC = input.int(0, "日の起点 (UTC時)  [0 = UTC日 / 22 = NYクローズ]", minval=0, maxval=23, group=gH)
+
+gL = "水平線 (0 = 非表示)"
+h1 = input.price(0.0, "水平線1", inline="h1", group=gL)
+c1 = input.color(color.gray,   "", inline="h1", group=gL)
+h2 = input.price(0.0, "水平線2", inline="h2", group=gL)
+c2 = input.color(color.gray,   "", inline="h2", group=gL)
+h3 = input.price(0.0, "水平線3", inline="h3", group=gL)
+c3 = input.color(color.gray,   "", inline="h3", group=gL)
+
+// ---------------- UT Bot ----------------
+src   = useHA ? request.security(ticker.heikinashi(syminfo.tickerid), timeframe.period, close, lookahead=barmerge.lookahead_off) : close
+nLoss = keyValue * ta.atr(atrLen)
+
+var float trail = na
+prevT = nz(trail[1])
+trail := src > prevT and src[1] > prevT ? math.max(prevT, src - nLoss) :
+         src < prevT and src[1] < prevT ? math.min(prevT, src + nLoss) :
+         src > prevT ? src - nLoss : src + nLoss
+
+var int dir = 0
+dir := src[1] < prevT and src > prevT ? 1 : src[1] > prevT and src < prevT ? -1 : nz(dir[1])
+
+utBuy  = src > trail and ta.crossover(src, trail)
+utSell = src < trail and ta.crossunder(src, trail)
+
+plot(showUT ? trail : na, "UT トレーリングストップ", dir == 1 ? color.green : dir == -1 ? color.red : color.gray, 2)
+plotshape(utBuy,  "Buy",  shape.labelup,   location.belowbar, color.green, text="Buy",  textcolor=color.white, size=size.tiny)
+plotshape(utSell, "Sell", shape.labeldown, location.abovebar, color.red,   text="Sell", textcolor=color.white, size=size.tiny)
+barcolor(barCol ? (src > trail ? color.green : color.red) : na)
+
+// ---------------- 平均線 ----------------
+ma(len) => maType == "EMA" ? ta.ema(close, len) : ta.sma(close, len)
+plot(show1 ? ma(len1) : na, "MA25",  color.new(color.yellow, 0), 1)
+plot(show2 ? ma(len2) : na, "MA75",  color.new(color.blue,   0), 2)
+plot(show3 ? ma(len3) : na, "MA200", color.new(color.purple, 0), 2)
+
+// ---------------- 前日 / 当日 高値・安値 (UTC日で自前集計) ----------------
+tShift  = time - dayStartUTC * 3600000
+dNum    = math.floor(tShift / 86400000)
+dChange = na(dNum[1]) or dNum != dNum[1]
+
+var float curH = na
+var float curL = na
+var float pdh  = na
+var float pdl  = na
+if dChange
+    pdh  := curH
+    pdl  := curL
+    curH := high
+    curL := low
+else
+    curH := math.max(nz(curH, high), high)
+    curL := math.min(nz(curL, low), low)
+
+plot(showPD ? pdh : na, "前日高値", color.new(color.teal,   0), 2, plot.style_linebr)
+plot(showPD ? pdl : na, "前日安値", color.new(color.maroon, 0), 2, plot.style_linebr)
+plot(showCD and not dChange ? curH : na, "当日高値", color.new(color.aqua,   40), 1, plot.style_linebr)
+plot(showCD and not dChange ? curL : na, "当日安値", color.new(color.orange, 40), 1, plot.style_linebr)
+
+// ---------------- 水平線 / 価格ラベル (最新バーで描き直し) ----------------
+var lns  = array.new_line()
+var lbls = array.new_label()
+
+mkLbl(float y, string title, color bg, color tc) =>
+    label.new(bar_index + 1, y, title + " " + str.tostring(y, format.mintick),
+         style=label.style_label_left, color=bg, textcolor=tc, size=size.small)
+
+mkLine(float y, color c) =>
+    line.new(bar_index - 1, y, bar_index, y, extend=extend.both, color=c, style=line.style_dashed, width=1)
+
+if barstate.islast
+    while array.size(lns) > 0
+        line.delete(array.pop(lns))
+    while array.size(lbls) > 0
+        label.delete(array.pop(lbls))
+    if h1 > 0
+        array.push(lns, mkLine(h1, c1))
+    if h2 > 0
+        array.push(lns, mkLine(h2, c2))
+    if h3 > 0
+        array.push(lns, mkLine(h3, c3))
+    if showLbl and showPD and not na(pdh)
+        array.push(lbls, mkLbl(pdh, "前日高値", color.new(color.teal,   0), color.white))
+        array.push(lbls, mkLbl(pdl, "前日安値", color.new(color.maroon, 0), color.white))
+    if showLbl and showCD
+        array.push(lbls, mkLbl(curH, "当日高値", color.new(color.aqua,   40), color.black))
+        array.push(lbls, mkLbl(curL, "当日安値", color.new(color.orange, 40), color.black))
+
+// ---------------- アラート ----------------
+alertcondition(utBuy,  "UT Buy",  "UT Bot Buy {{ticker}} {{close}}")
+alertcondition(utSell, "UT Sell", "UT Bot Sell {{ticker}} {{close}}")
+alertcondition(not na(pdh) and high >= pdh and high[1] < pdh and not dChange, "前日高値ブレイク", "前日高値ブレイク {{ticker}} {{close}}")
+alertcondition(not na(pdl) and low  <= pdl and low[1]  > pdl and not dChange, "前日安値ブレイク", "前日安値ブレイク {{ticker}} {{close}}")
