@@ -104,23 +104,21 @@ plot(showLvl ? tpL : na, "TP", color.new(color.green, 0), style=plot.style_circl
 plot(showLvl ? slL : na, "SL", color.new(color.red,   0), style=plot.style_circles)
 
 // ---------------- 高値/安値 価格ラベル (最新バーの右側) ----------------
-var label lbPdh = label.new(na, na, "", style=label.style_label_left, color=color.new(color.teal,   0), textcolor=color.white, size=size.small)
-var label lbPdl = label.new(na, na, "", style=label.style_label_left, color=color.new(color.maroon, 0), textcolor=color.white, size=size.small)
-var label lbCuH = label.new(na, na, "", style=label.style_label_left, color=color.new(color.aqua,   40), textcolor=color.black, size=size.small)
-var label lbCuL = label.new(na, na, "", style=label.style_label_left, color=color.new(color.orange, 40), textcolor=color.black, size=size.small)
+var lbls = array.new_label()
 
-setLbl(label lb, bool show, float y, string title) =>
-    if show and not na(y)
-        label.set_xy(lb, bar_index + 1, y)
-        label.set_text(lb, title + " " + str.tostring(y, format.mintick))
-    else
-        label.set_xy(lb, na, na)
+mkLbl(float y, string title, color bg, color tc) =>
+    label.new(bar_index + 1, y, title + " " + str.tostring(y, format.mintick),
+         style=label.style_label_left, color=bg, textcolor=tc, size=size.small)
 
 if barstate.islast
-    setLbl(lbPdh, showLbl and showLvl, pdh,  "前日高値")
-    setLbl(lbPdl, showLbl and showLvl, pdl,  "前日安値")
-    setLbl(lbCuH, showLbl and showCur, curH, "当日高値")
-    setLbl(lbCuL, showLbl and showCur, curL, "当日安値")
+    while array.size(lbls) > 0
+        label.delete(array.pop(lbls))
+    if showLbl and showLvl and dataOk
+        array.push(lbls, mkLbl(pdh, "前日高値", color.new(color.teal,   0), color.white))
+        array.push(lbls, mkLbl(pdl, "前日安値", color.new(color.maroon, 0), color.white))
+    if showLbl and showCur
+        array.push(lbls, mkLbl(curH, "当日高値", color.new(color.aqua,   40), color.black))
+        array.push(lbls, mkLbl(curL, "当日安値", color.new(color.orange, 40), color.black))
 
 // ---------------- アラート ----------------
 alertcondition(strategy.position_size > 0 and strategy.position_size[1] <= 0, "買いエントリー", "PDR breakout LONG")
