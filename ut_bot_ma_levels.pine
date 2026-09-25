@@ -1,4 +1,4 @@
-//@version=5
+//@version=6
 // ============================================================================
 //  UT Bot + 平均線(25/75/200) + 前日/当日 高値・安値 + 水平線
 //   - UT Bot: ATR トレーリングストップ。終値がストップを上抜け=Buy / 下抜け=Sell
@@ -66,8 +66,11 @@ trail := src > prevT and src[1] > prevT ? math.max(prevT, src - nLoss) :
 var int dir = 0
 dir := src[1] < prevT and src > prevT ? 1 : src[1] > prevT and src < prevT ? -1 : nz(dir[1])
 
-utBuy  = src > trail and ta.crossover(src, trail)
-utSell = src < trail and ta.crossunder(src, trail)
+// v6 は and/or が遅延評価なので、クロス判定は先に毎バー計算しておく
+utUp   = ta.crossover(src, trail)
+utDn   = ta.crossunder(src, trail)
+utBuy  = src > trail and utUp
+utSell = src < trail and utDn
 
 plot(showUT ? trail : na, "UT トレーリングストップ", dir == 1 ? color.green : dir == -1 ? color.red : color.gray, 2)
 plotshape(utBuy,  "Buy",  shape.labelup,   location.belowbar, color.green, text="Buy",  textcolor=color.white, size=size.tiny)
@@ -148,7 +151,8 @@ var lbls = array.new_label()
 
 mkLbl(float y, string title, color bg, color tc) =>
     label.new(bar_index + 1, y, title + " " + str.tostring(y, format.mintick),
-         style=label.style_label_left, color=bg, textcolor=tc, size=size.small)
+         style=label.style_label_left, color=bg, textcolor=tc, size=size.normal,
+         text_formatting=text.format_bold)
 
 mkLine(float y, color c) =>
     line.new(bar_index - 1, y, bar_index, y, extend=extend.both, color=c, style=line.style_dashed, width=1)
@@ -168,8 +172,8 @@ if barstate.islast
         array.push(lbls, mkLbl(pdh, "前日高値", hiCol, color.white))
         array.push(lbls, mkLbl(pdl, "前日安値", loCol, color.white))
     if showLbl and showCD
-        array.push(lbls, mkLbl(curH, "当日高値", color.new(hiCol, 40), color.white))
-        array.push(lbls, mkLbl(curL, "当日安値", color.new(loCol, 40), color.white))
+        array.push(lbls, mkLbl(curH, "当日高値", hiCol, color.white))
+        array.push(lbls, mkLbl(curL, "当日安値", loCol, color.white))
 
 // ---------------- アラート ----------------
 alertcondition(utBuy,  "UT Buy",  "UT Bot Buy {{ticker}} {{close}}")
