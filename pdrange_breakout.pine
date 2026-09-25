@@ -1,0 +1,127 @@
+//@version=5
+// ============================================================================
+//  Previous-Day Range Breakout  —  FIXED pips TP/SL
+//  pdrange_breakout.py の再現 (USD/JPY 45分足, TP 0.95円 / SL 1.05円,
+//  前日=UTC日, 1日1エントリー, 1ポジション制, 両方向, EOD手仕舞いなし)
+//
+//  推奨設定:
+//   - チャート: 時間足入力欄に「45」と打って 45分足。履歴は左スクロールで全部読む
+//   - Properties → Recalculate "On every tick" = OFF / Bar Magnifier = ON(可能なら)
+//   - Order size は下の initial_capital / default_qty で 1万通貨固定・資金10万円
+//   - 対象は USD/JPY (pip=0.01 前提)。他ペアは pip 入力を 0.0001 に
+// ============================================================================
+strategy("Prev-Day Range BO (fixed pips)", overlay=true,
+     initial_capital=100000, currency=currency.JPY,
+     default_qty_type=strategy.fixed, default_qty_value=10000,
+     pyramiding=0, process_orders_on_close=false,
+     commission_type=strategy.commission.percent, commission_value=0.0013,
+     slippage=0)
+
+// ---------------- Inputs ----------------
+gS = "Signal / Exit"
+tpPips    = input.float(95,  "TP (pips)", step=1, minval=1, group=gS)
+slPips    = input.float(105, "SL (pips)", step=1, minval=1, group=gS)
+pip       = input.float(0.01, "1 pip in price  (0.01 = JPYペア / 0.0001 = その他)", group=gS)
+maxPerDay = input.int(1, "1日の最大エントリー回数", minval=1, maxval=5, group=gS)
+useLong   = input.bool(true,  "前日高値ブレイクで買い", group=gS)
+useShort  = input.bool(true,  "前日安値ブレイクで売り", group=gS)
+eodExit   = input.bool(false, "日をまたぐ時に成行手仕舞い (元コードは false)", group=gS)
+
+gD = "Day definition"
+dayStartUTC = input.int(0, "日の起点 (UTC時)  [0 = Python版と一致 / 22 = NYクローズ]", minval=0, maxval=23, group=gD)
+
+gV = "Visuals"
+showLvl = input.bool(true, "前日H/L と TP/SL を描画", group=gV)
+showCur = input.bool(true, "当日高値/安値 (形成中) を描画", group=gV)
+showLbl = input.bool(true, "高値/安値の価格ラベルを表示", group=gV)
+
+tpDist = tpPips * pip
+slDist = slPips * pip
+
+// ---------------- UTC(オフセット)日で 前日 H/L を自前集計 ----------------
+tShift  = time - dayStartUTC * 3600000
+dNum    = math.floor(tShift / 86400000)
+dChange = na(dNum[1]) or dNum != dNum[1]
+
+var float curH = na
+var float curL = na
+var float pdh  = na
+var float pdl  = na
+if dChange
+    pdh  := curH
+    pdl  := curL
+    curH := high
+    curL := low
+else
+    curH := math.max(nz(curH, high), high)
+    curL := math.min(nz(curL, low), low)
+
+// ---------------- 1日の回数制限 (決済後の同日再エントリー禁止) ----------------
+var int tradesAtDayStart = 0
+if dChange
+    tradesAtDayStart := strategy.closedtrades + strategy.opentrades
+tradesToday = strategy.closedtrades + strategy.opentrades - tradesAtDayStart
+
+flat   = strategy.position_size == 0
+dataOk = not na(pdh) and not na(pdl)
+canArm = flat and dataOk and tradesToday < maxPerDay
+
+// ---------------- エントリー(前日H/L に逆指値) ----------------
+if canArm
+    if useLong
+        strategy.entry("Long",  strategy.long,  stop = pdh)
+    if useShort
+        strategy.entry("Short", strategy.short, stop = pdl)
+else
+    strategy.cancel("Long")
+    strategy.cancel("Short")
+
+if not flat
+    strategy.cancel(strategy.position_size > 0 ? "Short" : "Long")
+
+// ---------------- 決済:建値からの固定 TP / SL ----------------
+if strategy.position_size > 0
+    strategy.exit("x", from_entry = "Long",
+         limit = strategy.position_avg_price + tpDist,
+         stop  = strategy.position_avg_price - slDist)
+if strategy.position_size < 0
+    strategy.exit("x", from_entry = "Short",
+         limit = strategy.position_avg_price - tpDist,
+         stop  = strategy.position_avg_price + slDist)
+
+if eodExit and not flat and dChange
+    strategy.close_all("EOD")
+
+// ---------------- 描画 ----------------
+plot(showLvl ? pdh : na, "前日高値", color.new(color.teal,  0), style=plot.style_linebr)
+plot(showLvl ? pdl : na, "前日安値", color.new(color.maroon, 0), style=plot.style_linebr)
+// 当日高値/安値 (日替わりバーは na にして前日の線とつながらないようにする)
+plot(showCur and not dChange ? curH : na, "当日高値", color.new(color.aqua,   40), style=plot.style_linebr, linewidth=1)
+plot(showCur and not dChange ? curL : na, "当日安値", color.new(color.orange, 40), style=plot.style_linebr, linewidth=1)
+tpL = strategy.position_size > 0 ? strategy.position_avg_price + tpDist : strategy.position_size < 0 ? strategy.position_avg_price - tpDist : na
+slL = strategy.position_size > 0 ? strategy.position_avg_price - slDist : strategy.position_size < 0 ? strategy.position_avg_price + slDist : na
+plot(showLvl ? tpL : na, "TP", color.new(color.green, 0), style=plot.style_circles)
+plot(showLvl ? slL : na, "SL", color.new(color.red,   0), style=plot.style_circles)
+
+// ---------------- 高値/安値 価格ラベル (最新バーの右側) ----------------
+var label lbPdh = label.new(na, na, "", style=label.style_label_left, color=color.new(color.teal,   0), textcolor=color.white, size=size.small)
+var label lbPdl = label.new(na, na, "", style=label.style_label_left, color=color.new(color.maroon, 0), textcolor=color.white, size=size.small)
+var label lbCuH = label.new(na, na, "", style=label.style_label_left, color=color.new(color.aqua,   40), textcolor=color.black, size=size.small)
+var label lbCuL = label.new(na, na, "", style=label.style_label_left, color=color.new(color.orange, 40), textcolor=color.black, size=size.small)
+
+setLbl(label lb, bool show, float y, string title) =>
+    if show and not na(y)
+        label.set_xy(lb, bar_index + 1, y)
+        label.set_text(lb, title + " " + str.tostring(y, format.mintick))
+    else
+        label.set_xy(lb, na, na)
+
+if barstate.islast
+    setLbl(lbPdh, showLbl and showLvl, pdh,  "前日高値")
+    setLbl(lbPdl, showLbl and showLvl, pdl,  "前日安値")
+    setLbl(lbCuH, showLbl and showCur, curH, "当日高値")
+    setLbl(lbCuL, showLbl and showCur, curL, "当日安値")
+
+// ---------------- アラート ----------------
+alertcondition(strategy.position_size > 0 and strategy.position_size[1] <= 0, "買いエントリー", "PDR breakout LONG")
+alertcondition(strategy.position_size < 0 and strategy.position_size[1] >= 0, "売りエントリー", "PDR breakout SHORT")
