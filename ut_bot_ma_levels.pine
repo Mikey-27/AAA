@@ -5,9 +5,10 @@
 //   - 平均線: 25 / 75 / 200 (SMA / EMA 切替)
 //   - 高値・安値: 前日・当日 (UTC日。日の起点は変更可)
 //   - 水平線: 任意の価格を最大3本 (0 = 非表示)
-//   - アラート: UT Buy/Sell, 前日高値/安値ブレイク
+//   - ストキャス(4時間足): ゴールデンクロス中=背景緑 / デッドクロス中=背景赤
+//   - アラート: UT Buy/Sell, 前日高値/安値ブレイク, 4H ストキャス GC/DC
 // ============================================================================
-indicator("UT Bot + MA + H/L + 水平線", overlay=true, max_labels_count=500, max_lines_count=50)
+indicator("UT Bot + MA + H/L + 水平線", overlay=true, max_labels_count=500, max_lines_count=500)
 
 // ---------------- Inputs ----------------
 gU = "UT Bot"
@@ -25,12 +26,24 @@ len2   = input.int(75,  "MA2", minval=1, inline="m2", group=gM)
 show2  = input.bool(true, "", inline="m2", group=gM)
 len3   = input.int(200, "MA3", minval=1, inline="m3", group=gM)
 show3  = input.bool(true, "", inline="m3", group=gM)
+maW    = input.int(2, "太さ", minval=1, maxval=4, group=gM)
 
 gH = "高値・安値"
 showPD      = input.bool(true, "前日高値/安値", group=gH)
 showCD      = input.bool(true, "当日高値/安値 (形成中)", group=gH)
 showLbl     = input.bool(true, "価格ラベルを表示", group=gH)
 dayStartUTC = input.int(0, "日の起点 (UTC時)  [0 = UTC日 / 22 = NYクローズ]", minval=0, maxval=23, group=gH)
+hiCol       = input.color(color.blue, "高値の色", inline="hc", group=gH)
+loCol       = input.color(color.red,  "安値の色", inline="hc", group=gH)
+
+gS = "ストキャス (背景)"
+showBG  = input.bool(true, "GC=緑 / DC=赤 の背景を表示", group=gS)
+stTF    = input.timeframe("240", "時間足", group=gS)
+kLen    = input.int(14, "%K 期間", minval=1, group=gS)
+kSm     = input.int(3,  "%K スムージング", minval=1, group=gS)
+dSm     = input.int(3,  "%D 期間", minval=1, group=gS)
+stConf  = input.bool(true, "確定した足で判定 (リペイントなし)", group=gS)
+bgTransp = input.int(85, "背景の透明度", minval=0, maxval=100, group=gS)
 
 gL = "水平線 (0 = 非表示)"
 h1 = input.price(0.0, "水平線1", inline="h1", group=gL)
@@ -63,9 +76,9 @@ barcolor(barCol ? (src > trail ? color.green : color.red) : na)
 
 // ---------------- 平均線 ----------------
 ma(len) => maType == "EMA" ? ta.ema(close, len) : ta.sma(close, len)
-plot(show1 ? ma(len1) : na, "MA25",  color.new(color.yellow, 0), 1)
-plot(show2 ? ma(len2) : na, "MA75",  color.new(color.blue,   0), 2)
-plot(show3 ? ma(len3) : na, "MA200", color.new(color.purple, 0), 2)
+plot(show1 ? ma(len1) : na, "MA25",  color.orange,               maW)
+plot(show2 ? ma(len2) : na, "MA75",  color.yellow,               maW)
+plot(show3 ? ma(len3) : na, "MA200", color.rgb(0, 191, 255),     maW)
 
 // ---------------- 前日 / 当日 高値・安値 (UTC日で自前集計) ----------------
 tShift  = time - dayStartUTC * 3600000
@@ -85,10 +98,49 @@ else
     curH := math.max(nz(curH, high), high)
     curL := math.min(nz(curL, low), low)
 
-plot(showPD ? pdh : na, "前日高値", color.new(color.teal,   0), 2, plot.style_linebr)
-plot(showPD ? pdl : na, "前日安値", color.new(color.maroon, 0), 2, plot.style_linebr)
-plot(showCD and not dChange ? curH : na, "当日高値", color.new(color.aqua,   40), 1, plot.style_linebr)
-plot(showCD and not dChange ? curL : na, "当日安値", color.new(color.orange, 40), 1, plot.style_linebr)
+// 前日: 太さ4・点線 / 当日: 太さ2・破線 (plot は線種を変えられないので line で描画)
+var line pdhLn = na
+var line pdlLn = na
+var line cdhLn = na
+var line cdlLn = na
+
+mkDayLine(float y, color c, int w, string st) =>
+    line.new(bar_index, y, bar_index, y, color=c, width=w, style=st)
+
+if dChange
+    pdhLn := showPD and not na(pdh) ? mkDayLine(pdh, hiCol, 4, line.style_dotted) : na
+    pdlLn := showPD and not na(pdl) ? mkDayLine(pdl, loCol, 4, line.style_dotted) : na
+    cdhLn := showCD ? mkDayLine(curH, hiCol, 2, line.style_dashed) : na
+    cdlLn := showCD ? mkDayLine(curL, loCol, 2, line.style_dashed) : na
+else
+    if not na(pdhLn)
+        line.set_x2(pdhLn, bar_index)
+    if not na(pdlLn)
+        line.set_x2(pdlLn, bar_index)
+    if showCD
+        if curH != curH[1]
+            cdhLn := mkDayLine(curH, hiCol, 2, line.style_dashed)
+        else
+            line.set_x2(cdhLn, bar_index)
+        if curL != curL[1]
+            cdlLn := mkDayLine(curL, loCol, 2, line.style_dashed)
+        else
+            line.set_x2(cdlLn, bar_index)
+
+// ---------------- ストキャス 4時間足 GC / DC 背景 ----------------
+stochKD(bool conf) =>
+    k  = ta.sma(ta.stoch(close, high, low, kLen), kSm)
+    d  = ta.sma(k, dSm)
+    kk = conf ? k[1] : k
+    dd = conf ? d[1] : d
+    [kk, dd]
+
+[stK, stD] = request.security(syminfo.tickerid, stTF, stochKD(stConf),
+     lookahead = stConf ? barmerge.lookahead_on : barmerge.lookahead_off)
+
+stGC = ta.crossover(stK, stD)
+stDC = ta.crossunder(stK, stD)
+bgcolor(showBG ? (stK > stD ? color.new(color.green, bgTransp) : stK < stD ? color.new(color.red, bgTransp) : na) : na, title="ストキャス GC/DC 背景")
 
 // ---------------- 水平線 / 価格ラベル (最新バーで描き直し) ----------------
 var lns  = array.new_line()
@@ -113,14 +165,16 @@ if barstate.islast
     if h3 > 0
         array.push(lns, mkLine(h3, c3))
     if showLbl and showPD and not na(pdh)
-        array.push(lbls, mkLbl(pdh, "前日高値", color.new(color.teal,   0), color.white))
-        array.push(lbls, mkLbl(pdl, "前日安値", color.new(color.maroon, 0), color.white))
+        array.push(lbls, mkLbl(pdh, "前日高値", hiCol, color.white))
+        array.push(lbls, mkLbl(pdl, "前日安値", loCol, color.white))
     if showLbl and showCD
-        array.push(lbls, mkLbl(curH, "当日高値", color.new(color.aqua,   40), color.black))
-        array.push(lbls, mkLbl(curL, "当日安値", color.new(color.orange, 40), color.black))
+        array.push(lbls, mkLbl(curH, "当日高値", color.new(hiCol, 40), color.white))
+        array.push(lbls, mkLbl(curL, "当日安値", color.new(loCol, 40), color.white))
 
 // ---------------- アラート ----------------
 alertcondition(utBuy,  "UT Buy",  "UT Bot Buy {{ticker}} {{close}}")
 alertcondition(utSell, "UT Sell", "UT Bot Sell {{ticker}} {{close}}")
 alertcondition(not na(pdh) and high >= pdh and high[1] < pdh and not dChange, "前日高値ブレイク", "前日高値ブレイク {{ticker}} {{close}}")
 alertcondition(not na(pdl) and low  <= pdl and low[1]  > pdl and not dChange, "前日安値ブレイク", "前日安値ブレイク {{ticker}} {{close}}")
+alertcondition(stGC, "4H ストキャス GC", "4H ストキャス ゴールデンクロス {{ticker}} {{close}}")
+alertcondition(stDC, "4H ストキャス DC", "4H ストキャス デッドクロス {{ticker}} {{close}}")
