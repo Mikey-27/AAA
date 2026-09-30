@@ -55,6 +55,7 @@ gP = "高値・安値の数字 (チャート上下)"
 showPiv = input.bool(true, "スイング高値/安値の価格を表示", group=gP)
 pivL    = input.int(10, "左側の本数", minval=1, group=gP)
 pivR    = input.int(10, "右側の本数 (確定までの遅れ)", minval=1, group=gP)
+pivGap  = input.int(20, "数字どうしの最小間隔 (本) ※近いと高い/安い方だけ残す", minval=0, group=gP)
 pivSize = input.string("normal", "文字サイズ", options=["small", "normal", "large"], group=gP)
 showVis = input.bool(true, "表示範囲の最高値/最安値を表示 (DMM風)", group=gP)
 
@@ -168,12 +169,47 @@ bgcolor(showBG ? (stState == 1 ? color.new(color.green, bgTransp) : stState == -
 lblSize = pivSize == "small" ? size.small : pivSize == "large" ? size.large : size.normal
 ph = ta.pivothigh(high, pivL, pivR)
 pl = ta.pivotlow(low, pivL, pivR)
+
+mkPivLbl(float y, bool isHigh) =>
+    label.new(bar_index - pivR, y, str.tostring(y, format.mintick),
+         style = isHigh ? label.style_label_down : label.style_label_up,
+         color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
+
+// 重なり防止: 前の数字から pivGap 本以内なら、より高い(安い)方だけ残す
+var phArr = array.new_label()
+var plArr = array.new_label()
+var int   lastPhBar = na
+var float lastPh    = na
+var int   lastPlBar = na
+var float lastPl    = na
 if showPiv and not na(ph)
-    label.new(bar_index - pivR, ph, str.tostring(ph, format.mintick), style=label.style_label_down,
-         color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
+    x = bar_index - pivR
+    if not na(lastPhBar) and x - lastPhBar < pivGap
+        if ph > lastPh and array.size(phArr) > 0
+            label.delete(array.pop(phArr))
+            array.push(phArr, mkPivLbl(ph, true))
+            lastPhBar := x
+            lastPh    := ph
+    else
+        array.push(phArr, mkPivLbl(ph, true))
+        lastPhBar := x
+        lastPh    := ph
 if showPiv and not na(pl)
-    label.new(bar_index - pivR, pl, str.tostring(pl, format.mintick), style=label.style_label_up,
-         color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
+    x = bar_index - pivR
+    if not na(lastPlBar) and x - lastPlBar < pivGap
+        if pl < lastPl and array.size(plArr) > 0
+            label.delete(array.pop(plArr))
+            array.push(plArr, mkPivLbl(pl, false))
+            lastPlBar := x
+            lastPl    := pl
+    else
+        array.push(plArr, mkPivLbl(pl, false))
+        lastPlBar := x
+        lastPl    := pl
+if array.size(phArr) > 200
+    label.delete(array.shift(phArr))
+if array.size(plArr) > 200
+    label.delete(array.shift(plArr))
 
 // ---------------- 表示範囲の最高値・最安値 (DMM風) ----------------
 // 画面に表示されている範囲の中で一番高い足/安い足を探して価格を出す (スクロールすると更新)
@@ -205,6 +241,11 @@ if barstate.islast
              color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
         visLLbl := label.new(visLBar, visL, "▲ " + str.tostring(visL, format.mintick), style=label.style_label_up,
              color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
+    // 最高値/最安値と同じ足のスイング数字は隠して二重表示を防ぐ
+    for l in phArr
+        label.set_text(l, showVis and label.get_x(l) == visHBar ? "" : str.tostring(label.get_y(l), format.mintick))
+    for l in plArr
+        label.set_text(l, showVis and label.get_x(l) == visLBar ? "" : str.tostring(label.get_y(l), format.mintick))
 
 // ---------------- 水平線 / 価格ラベル (最新バーで描き直し) ----------------
 var lns  = array.new_line()
