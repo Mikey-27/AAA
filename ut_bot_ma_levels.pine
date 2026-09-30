@@ -36,6 +36,7 @@ gH = "高値・安値"
 showPD      = input.bool(true, "前日高値/安値", group=gH)
 showCD      = input.bool(true, "当日高値/安値 (形成中)", group=gH)
 showLbl     = input.bool(true, "価格ラベルを表示", group=gH)
+keepPast    = input.bool(false, "過去の日の線も残す (オフ = 今日の4本だけ)", group=gH)
 dayStartUTC = input.int(0, "日の起点 (UTC時)  [0 = UTC日 / 22 = NYクローズ]", minval=0, maxval=23, group=gH)
 hiCol       = input.color(color.blue, "高値の色", inline="hc", group=gH)
 loCol       = input.color(color.red,  "安値の色", inline="hc", group=gH)
@@ -121,6 +122,8 @@ else
     curL := math.min(nz(curL, low), low)
 
 // 前日: 太さ4・点線 / 当日: 太さ2・破線 (plot は線種を変えられないので line で描画)
+// 日が替わったら前の日の線は消して、今日の4本だけ引き直す (keepPast = オンなら残す)
+// 当日高値/安値は1本の線で、更新したら線ごと新しい高値/安値へ動かす
 var line pdhLn = na
 var line pdlLn = na
 var line cdhLn = na
@@ -130,6 +133,11 @@ mkDayLine(float y, color c, int w, string st) =>
     line.new(bar_index, y, bar_index, y, color=c, width=w, style=st)
 
 if dChange
+    if not keepPast
+        line.delete(pdhLn)
+        line.delete(pdlLn)
+        line.delete(cdhLn)
+        line.delete(cdlLn)
     pdhLn := showPD and not na(pdh) ? mkDayLine(pdh, hiCol, 4, line.style_dotted) : na
     pdlLn := showPD and not na(pdl) ? mkDayLine(pdl, loCol, 4, line.style_dotted) : na
     cdhLn := showCD ? mkDayLine(curH, hiCol, 2, line.style_dashed) : na
@@ -139,15 +147,14 @@ else
         line.set_x2(pdhLn, bar_index)
     if not na(pdlLn)
         line.set_x2(pdlLn, bar_index)
-    if showCD
-        if curH != curH[1]
-            cdhLn := mkDayLine(curH, hiCol, 2, line.style_dashed)
-        else
-            line.set_x2(cdhLn, bar_index)
-        if curL != curL[1]
-            cdlLn := mkDayLine(curL, loCol, 2, line.style_dashed)
-        else
-            line.set_x2(cdlLn, bar_index)
+    if not na(cdhLn)
+        line.set_x2(cdhLn, bar_index)
+        line.set_y1(cdhLn, curH)
+        line.set_y2(cdhLn, curH)
+    if not na(cdlLn)
+        line.set_x2(cdlLn, bar_index)
+        line.set_y1(cdlLn, curL)
+        line.set_y2(cdlLn, curL)
 
 // ---------------- ストキャス 4時間足 GC / DC 背景 ----------------
 // 天井・底ゾーン: クロス直前の %K か %D が 底(7)以下 で GC → 1 / 天井(93)以上 で DC → -1
