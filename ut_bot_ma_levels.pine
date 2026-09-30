@@ -170,8 +170,32 @@ lblSize = pivSize == "small" ? size.small : pivSize == "large" ? size.large : si
 ph = ta.pivothigh(high, pivL, pivR)
 pl = ta.pivotlow(low, pivL, pivR)
 
+// Buy/Sell マークと重ならないように: 近く(±2本)に Sell があれば高値の数字を上へ、
+// Buy があれば安値の数字を下へずらす (空行を足して押し出す)
+var sellBars = array.new_int()
+var buyBars  = array.new_int()
+if utSell
+    array.push(sellBars, bar_index)
+if utBuy
+    array.push(buyBars, bar_index)
+if array.size(sellBars) > 300
+    array.shift(sellBars)
+if array.size(buyBars) > 300
+    array.shift(buyBars)
+
+nearSig(array<int> bars, int x) =>
+    bool hit = false
+    for b in bars
+        if math.abs(b - x) <= 2
+            hit := true
+    hit
+
+numText(string t, bool isHigh, int x) =>
+    isHigh ? (nearSig(sellBars, x) ? t + "\n \n " : t) : (nearSig(buyBars, x) ? " \n \n" + t : t)
+
 mkPivLbl(float y, bool isHigh) =>
-    label.new(bar_index - pivR, y, str.tostring(y, format.mintick),
+    x = bar_index - pivR
+    label.new(x, y, numText(str.tostring(y, format.mintick), isHigh, x),
          style = isHigh ? label.style_label_down : label.style_label_up,
          color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
 
@@ -237,15 +261,15 @@ if barstate.islast
     label.delete(visHLbl)
     label.delete(visLLbl)
     if showVis and not na(visH)
-        visHLbl := label.new(visHBar, visH, "▼ " + str.tostring(visH, format.mintick), style=label.style_label_down,
+        visHLbl := label.new(visHBar, visH, numText("▼ " + str.tostring(visH, format.mintick), true, visHBar), style=label.style_label_down,
              color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
-        visLLbl := label.new(visLBar, visL, "▲ " + str.tostring(visL, format.mintick), style=label.style_label_up,
+        visLLbl := label.new(visLBar, visL, numText("▲ " + str.tostring(visL, format.mintick), false, visLBar), style=label.style_label_up,
              color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
     // 最高値/最安値と同じ足のスイング数字は隠して二重表示を防ぐ
     for l in phArr
-        label.set_text(l, showVis and label.get_x(l) == visHBar ? "" : str.tostring(label.get_y(l), format.mintick))
+        label.set_textcolor(l, showVis and label.get_x(l) == visHBar ? color.new(color.white, 100) : color.white)
     for l in plArr
-        label.set_text(l, showVis and label.get_x(l) == visLBar ? "" : str.tostring(label.get_y(l), format.mintick))
+        label.set_textcolor(l, showVis and label.get_x(l) == visLBar ? color.new(color.white, 100) : color.white)
 
 // ---------------- 水平線 / 価格ラベル (最新バーで描き直し) ----------------
 var lns  = array.new_line()
