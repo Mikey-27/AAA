@@ -5,7 +5,9 @@
 //   - 平均線: 25 / 75 / 200 (SMA / EMA 切替)
 //   - 高値・安値: 前日・当日 (UTC日。日の起点は変更可)
 //   - 水平線: 任意の価格を最大3本 (0 = 非表示)
-//   - ストキャス(4時間足): ゴールデンクロス中=背景緑 / デッドクロス中=背景赤
+//   - ストキャス(4時間足): 底(7)以下でGC → 背景緑 / 天井(93)以上でDC → 背景赤
+//     (次の反対シグナルが出るまで色を維持)
+//   - 高値・安値の数字: スイング高値の上 / スイング安値の下に価格を表示 (白・太字)
 //   - アラート: UT Buy/Sell, 前日高値/安値ブレイク, 4H ストキャス GC/DC
 // ============================================================================
 indicator("UT Bot + MA + H/L + 水平線", overlay=true, max_labels_count=500, max_lines_count=500)
@@ -38,12 +40,21 @@ loCol       = input.color(color.red,  "安値の色", inline="hc", group=gH)
 
 gS = "ストキャス (背景)"
 showBG  = input.bool(true, "GC=緑 / DC=赤 の背景を表示", group=gS)
+stMode  = input.string("天井・底ゾーン", "判定", options=["天井・底ゾーン", "全クロス"], group=gS)
+stHi    = input.float(93, "天井 (この値以上で DC)", minval=50, maxval=100, group=gS)
+stLo    = input.float(7,  "底 (この値以下で GC)",   minval=0,  maxval=50,  group=gS)
 stTF    = input.timeframe("240", "時間足", group=gS)
 kLen    = input.int(14, "%K 期間", minval=1, group=gS)
 kSm     = input.int(3,  "%K スムージング", minval=1, group=gS)
 dSm     = input.int(3,  "%D 期間", minval=1, group=gS)
 stConf  = input.bool(true, "確定した足で判定 (リペイントなし)", group=gS)
 bgTransp = input.int(85, "背景の透明度", minval=0, maxval=100, group=gS)
+
+gP = "高値・安値の数字 (チャート上下)"
+showPiv = input.bool(true, "スイング高値/安値の価格を表示", group=gP)
+pivL    = input.int(10, "左側の本数", minval=1, group=gP)
+pivR    = input.int(10, "右側の本数 (確定までの遅れ)", minval=1, group=gP)
+pivSize = input.string("normal", "文字サイズ", options=["small", "normal", "large"], group=gP)
 
 gL = "水平線 (0 = 非表示)"
 h1 = input.price(0.0, "水平線1", inline="h1", group=gL)
@@ -131,19 +142,36 @@ else
             line.set_x2(cdlLn, bar_index)
 
 // ---------------- ストキャス 4時間足 GC / DC 背景 ----------------
-stochKD(bool conf) =>
+// 天井・底ゾーン: クロス直前の %K か %D が 底(7)以下 で GC → 1 / 天井(93)以上 で DC → -1
+// 状態は次の反対シグナルまで維持 (前回と同じく色を塗り続ける)
+stochState(bool conf, bool zone, float hiTh, float loTh) =>
     k  = ta.sma(ta.stoch(close, high, low, kLen), kSm)
     d  = ta.sma(k, dSm)
-    kk = conf ? k[1] : k
-    dd = conf ? d[1] : d
-    [kk, dd]
+    up = ta.crossover(k, d)
+    dn = ta.crossunder(k, d)
+    gc = up and (not zone or math.min(k[1], d[1]) <= loTh)
+    dc = dn and (not zone or math.max(k[1], d[1]) >= hiTh)
+    var int st = 0
+    st := gc ? 1 : dc ? -1 : st
+    conf ? st[1] : st
 
-[stK, stD] = request.security(syminfo.tickerid, stTF, stochKD(stConf),
+stState = request.security(syminfo.tickerid, stTF, stochState(stConf, stMode == "天井・底ゾーン", stHi, stLo),
      lookahead = stConf ? barmerge.lookahead_on : barmerge.lookahead_off)
 
-stGC = ta.crossover(stK, stD)
-stDC = ta.crossunder(stK, stD)
-bgcolor(showBG ? (stK > stD ? color.new(color.green, bgTransp) : stK < stD ? color.new(color.red, bgTransp) : na) : na, title="ストキャス GC/DC 背景")
+stGC = stState == 1  and nz(stState[1]) != 1
+stDC = stState == -1 and nz(stState[1]) != -1
+bgcolor(showBG ? (stState == 1 ? color.new(color.green, bgTransp) : stState == -1 ? color.new(color.red, bgTransp) : na) : na, title="ストキャス GC/DC 背景")
+
+// ---------------- 高値・安値の数字 (スイング高値の上 / 安値の下) ----------------
+lblSize = pivSize == "small" ? size.small : pivSize == "large" ? size.large : size.normal
+ph = ta.pivothigh(high, pivL, pivR)
+pl = ta.pivotlow(low, pivL, pivR)
+if showPiv and not na(ph)
+    label.new(bar_index - pivR, ph, str.tostring(ph, format.mintick), style=label.style_label_down,
+         color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
+if showPiv and not na(pl)
+    label.new(bar_index - pivR, pl, str.tostring(pl, format.mintick), style=label.style_label_up,
+         color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
 
 // ---------------- 水平線 / 価格ラベル (最新バーで描き直し) ----------------
 var lns  = array.new_line()
@@ -180,5 +208,5 @@ alertcondition(utBuy,  "UT Buy",  "UT Bot Buy {{ticker}} {{close}}")
 alertcondition(utSell, "UT Sell", "UT Bot Sell {{ticker}} {{close}}")
 alertcondition(not na(pdh) and high >= pdh and high[1] < pdh and not dChange, "前日高値ブレイク", "前日高値ブレイク {{ticker}} {{close}}")
 alertcondition(not na(pdl) and low  <= pdl and low[1]  > pdl and not dChange, "前日安値ブレイク", "前日安値ブレイク {{ticker}} {{close}}")
-alertcondition(stGC, "4H ストキャス GC", "4H ストキャス ゴールデンクロス {{ticker}} {{close}}")
-alertcondition(stDC, "4H ストキャス DC", "4H ストキャス デッドクロス {{ticker}} {{close}}")
+alertcondition(stGC, "4H ストキャス GC", "4H ストキャス ゴールデンクロス(底) {{ticker}} {{close}}")
+alertcondition(stDC, "4H ストキャス DC", "4H ストキャス デッドクロス(天井) {{ticker}} {{close}}")
