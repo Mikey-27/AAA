@@ -8,6 +8,7 @@
 //   - ストキャス(4時間足): 底(7)以下でGC → 背景緑 / 天井(93)以上でDC → 背景赤
 //     (次の反対シグナルが出るまで色を維持)
 //   - 高値・安値の数字: スイング高値の上 / スイング安値の下に価格を表示 (白・太字)
+//   - 表示範囲の最高値・最安値: DMM のように画面内の一番高い/安い足に価格を表示
 //   - アラート: UT Buy/Sell, 前日高値/安値ブレイク, 4H ストキャス GC/DC
 // ============================================================================
 indicator("UT Bot + MA + H/L + 水平線", overlay=true, max_labels_count=500, max_lines_count=500)
@@ -55,6 +56,7 @@ showPiv = input.bool(true, "スイング高値/安値の価格を表示", group=
 pivL    = input.int(10, "左側の本数", minval=1, group=gP)
 pivR    = input.int(10, "右側の本数 (確定までの遅れ)", minval=1, group=gP)
 pivSize = input.string("normal", "文字サイズ", options=["small", "normal", "large"], group=gP)
+showVis = input.bool(true, "表示範囲の最高値/最安値を表示 (DMM風)", group=gP)
 
 gL = "水平線 (0 = 非表示)"
 h1 = input.price(0.0, "水平線1", inline="h1", group=gL)
@@ -172,6 +174,37 @@ if showPiv and not na(ph)
 if showPiv and not na(pl)
     label.new(bar_index - pivR, pl, str.tostring(pl, format.mintick), style=label.style_label_up,
          color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
+
+// ---------------- 表示範囲の最高値・最安値 (DMM風) ----------------
+// 画面に表示されている範囲の中で一番高い足/安い足を探して価格を出す (スクロールすると更新)
+inVis = time >= chart.left_visible_bar_time and time <= chart.right_visible_bar_time
+var float visH    = na
+var float visL    = na
+var int   visHBar = na
+var int   visLBar = na
+if inVis and not inVis[1]
+    visH    := high
+    visL    := low
+    visHBar := bar_index
+    visLBar := bar_index
+else if inVis
+    if high >= visH
+        visH    := high
+        visHBar := bar_index
+    if low <= visL
+        visL    := low
+        visLBar := bar_index
+
+var label visHLbl = na
+var label visLLbl = na
+if barstate.islast
+    label.delete(visHLbl)
+    label.delete(visLLbl)
+    if showVis and not na(visH)
+        visHLbl := label.new(visHBar, visH, "▼ " + str.tostring(visH, format.mintick), style=label.style_label_down,
+             color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
+        visLLbl := label.new(visLBar, visL, "▲ " + str.tostring(visL, format.mintick), style=label.style_label_up,
+             color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
 
 // ---------------- 水平線 / 価格ラベル (最新バーで描き直し) ----------------
 var lns  = array.new_line()
