@@ -7,7 +7,8 @@
 //   - 水平線: 任意の価格を最大3本 (0 = 非表示)
 //   - ストキャス(4時間足): 底(7)以下でGC → 背景緑 / 天井(93)以上でDC → 背景赤
 //     (次の反対シグナルが出るまで色を維持)
-//   - 高値・安値の数字: スイング高値の上 / スイング安値の下に価格を表示 (白・太字)
+//   - 高値・安値の数字: ジグザグで天井と底を交互に判定して価格を表示 (白・太字)
+//     一定の幅(ATR倍数 or pips)だけ反転したら天井/底を確定。天天・底底にはならない
 //   - 表示範囲の最高値・最安値: DMM のように画面内の一番高い/安い足に価格を表示
 //   - アラート: UT Buy/Sell, 前日高値/安値ブレイク, 4H ストキャス GC/DC
 // ============================================================================
@@ -51,13 +52,17 @@ dSm     = input.int(3,  "%D 期間", minval=1, group=gS)
 stConf  = input.bool(true, "確定した足で判定 (リペイントなし)", group=gS)
 bgTransp = input.int(85, "背景の透明度", minval=0, maxval=100, group=gS)
 
-gP = "高値・安値の数字 (チャート上下)"
-showPiv = input.bool(true, "スイング高値/安値の価格を表示", group=gP)
-pivL    = input.int(10, "左側の本数", minval=1, group=gP)
-pivR    = input.int(10, "右側の本数 (確定までの遅れ)", minval=1, group=gP)
-pivGap  = input.int(20, "数字どうしの最小間隔 (本) ※近いと高い/安い方だけ残す", minval=0, group=gP)
-pivSize = input.string("normal", "文字サイズ", options=["small", "normal", "large"], group=gP)
-showVis = input.bool(true, "表示範囲の最高値/最安値を表示 (DMM風)", group=gP)
+gP = "高値・安値の数字 (ジグザグ)"
+showZZ    = input.bool(true, "ジグザグの天井・底に価格を表示", group=gP)
+zzMode    = input.string("ATR倍数", "反転の幅の決め方", options=["ATR倍数", "pips"], group=gP)
+zzAtrMult = input.float(2.0, "ATR 倍数 (大きいほど数字が減る)", step=0.5, minval=0.5, group=gP)
+zzAtrLen  = input.int(14, "ATR 期間", minval=1, group=gP)
+zzPips    = input.float(50, "pips (大きいほど数字が減る)", step=5, minval=1, group=gP)
+zzPip     = input.float(0.01, "1 pip  (0.01 = JPYペア / 0.0001 = その他)", group=gP)
+zzLine    = input.bool(true, "ジグザグ線を描画", group=gP)
+zzLineCol = input.color(color.new(color.white, 50), "ジグザグ線の色", group=gP)
+pivSize   = input.string("normal", "文字サイズ", options=["small", "normal", "large"], group=gP)
+showVis   = input.bool(true, "表示範囲の最高値/最安値を表示 (DMM風)", group=gP)
 
 gL = "水平線 (0 = 非表示)"
 h1 = input.price(0.0, "水平線1", inline="h1", group=gL)
@@ -165,10 +170,8 @@ stGC = stState == 1  and nz(stState[1]) != 1
 stDC = stState == -1 and nz(stState[1]) != -1
 bgcolor(showBG ? (stState == 1 ? color.new(color.green, bgTransp) : stState == -1 ? color.new(color.red, bgTransp) : na) : na, title="ストキャス GC/DC 背景")
 
-// ---------------- 高値・安値の数字 (スイング高値の上 / 安値の下) ----------------
+// ---------------- 高値・安値の数字 (ジグザグ: 天井と底を交互に) ----------------
 lblSize = pivSize == "small" ? size.small : pivSize == "large" ? size.large : size.normal
-ph = ta.pivothigh(high, pivL, pivR)
-pl = ta.pivotlow(low, pivL, pivR)
 
 // Buy/Sell マークと重ならないように: 近く(±2本)に Sell があれば高値の数字を上へ、
 // Buy があれば安値の数字を下へずらす (空行を足して押し出す)
@@ -193,47 +196,71 @@ nearSig(array<int> bars, int x) =>
 numText(string t, bool isHigh, int x) =>
     isHigh ? (nearSig(sellBars, x) ? t + "\n \n " : t) : (nearSig(buyBars, x) ? " \n \n" + t : t)
 
-mkPivLbl(float y, bool isHigh) =>
-    x = bar_index - pivR
+mkZZLbl(float y, int x, bool isHigh) =>
     label.new(x, y, numText(str.tostring(y, format.mintick), isHigh, x),
          style = isHigh ? label.style_label_down : label.style_label_up,
          color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
 
-// 重なり防止: 前の数字から pivGap 本以内なら、より高い(安い)方だけ残す
-var phArr = array.new_label()
-var plArr = array.new_label()
-var int   lastPhBar = na
-var float lastPh    = na
-var int   lastPlBar = na
-var float lastPl    = na
-if showPiv and not na(ph)
-    x = bar_index - pivR
-    if not na(lastPhBar) and x - lastPhBar < pivGap
-        if ph > lastPh and array.size(phArr) > 0
-            label.delete(array.pop(phArr))
-            array.push(phArr, mkPivLbl(ph, true))
-            lastPhBar := x
-            lastPh    := ph
+// 反転の幅
+zzAtr = ta.atr(zzAtrLen)
+zzThr = zzMode == "ATR倍数" ? zzAtrMult * zzAtr : zzPips * zzPip
+
+// zDir =  1: 上昇の波 (天井を探している)  → 高値更新で天井候補を更新 / 天井から zzThr 下げたら天井確定
+// zDir = -1: 下降の波 (底を探している)    → 安値更新で底候補を更新   / 底から zzThr 上げたら底確定
+// 確定したら必ず反対側を探すので、天井→底→天井… と交互になる
+var int   zDir   = 1
+var float zExt   = na
+var int   zBar   = na
+var label zLbl   = na
+var line  zLn    = na
+var zzH = array.new_label()
+var zzL = array.new_label()
+
+if showZZ and not na(zzThr)
+    if na(zExt)
+        zExt := high
+        zBar := bar_index
+        zLbl := mkZZLbl(high, bar_index, true)
+        array.push(zzH, zLbl)
+    else if zDir == 1
+        if high >= zExt
+            zExt := high
+            zBar := bar_index
+            label.set_xy(zLbl, zBar, zExt)
+            if not na(zLn)
+                line.set_xy2(zLn, zBar, zExt)
+        else if low <= zExt - zzThr
+            // 天井確定 → 底を探す
+            pB = zBar
+            pP = zExt
+            zDir := -1
+            zExt := low
+            zBar := bar_index
+            zLbl := mkZZLbl(low, bar_index, false)
+            array.push(zzL, zLbl)
+            zLn := zzLine ? line.new(pB, pP, zBar, zExt, color=zzLineCol, width=1) : na
     else
-        array.push(phArr, mkPivLbl(ph, true))
-        lastPhBar := x
-        lastPh    := ph
-if showPiv and not na(pl)
-    x = bar_index - pivR
-    if not na(lastPlBar) and x - lastPlBar < pivGap
-        if pl < lastPl and array.size(plArr) > 0
-            label.delete(array.pop(plArr))
-            array.push(plArr, mkPivLbl(pl, false))
-            lastPlBar := x
-            lastPl    := pl
-    else
-        array.push(plArr, mkPivLbl(pl, false))
-        lastPlBar := x
-        lastPl    := pl
-if array.size(phArr) > 200
-    label.delete(array.shift(phArr))
-if array.size(plArr) > 200
-    label.delete(array.shift(plArr))
+        if low <= zExt
+            zExt := low
+            zBar := bar_index
+            label.set_xy(zLbl, zBar, zExt)
+            if not na(zLn)
+                line.set_xy2(zLn, zBar, zExt)
+        else if high >= zExt + zzThr
+            // 底確定 → 天井を探す
+            pB = zBar
+            pP = zExt
+            zDir := 1
+            zExt := high
+            zBar := bar_index
+            zLbl := mkZZLbl(high, bar_index, true)
+            array.push(zzH, zLbl)
+            zLn := zzLine ? line.new(pB, pP, zBar, zExt, color=zzLineCol, width=1) : na
+
+if array.size(zzH) > 150
+    label.delete(array.shift(zzH))
+if array.size(zzL) > 150
+    label.delete(array.shift(zzL))
 
 // ---------------- 表示範囲の最高値・最安値 (DMM風) ----------------
 // 画面に表示されている範囲の中で一番高い足/安い足を探して価格を出す (スクロールすると更新)
@@ -265,10 +292,13 @@ if barstate.islast
              color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
         visLLbl := label.new(visLBar, visL, numText("▲ " + str.tostring(visL, format.mintick), false, visLBar), style=label.style_label_up,
              color=color.new(color.white, 100), textcolor=color.white, size=lblSize, text_formatting=text.format_bold)
-    // 最高値/最安値と同じ足のスイング数字は隠して二重表示を防ぐ
-    for l in phArr
+    // ジグザグの数字を最新の位置・Buy/Sell の有無で書き直し、
+    // 最高値/最安値と同じ足の数字は隠して二重表示を防ぐ
+    for l in zzH
+        label.set_text(l, numText(str.tostring(label.get_y(l), format.mintick), true, label.get_x(l)))
         label.set_textcolor(l, showVis and label.get_x(l) == visHBar ? color.new(color.white, 100) : color.white)
-    for l in plArr
+    for l in zzL
+        label.set_text(l, numText(str.tostring(label.get_y(l), format.mintick), false, label.get_x(l)))
         label.set_textcolor(l, showVis and label.get_x(l) == visLBar ? color.new(color.white, 100) : color.white)
 
 // ---------------- 水平線 / 価格ラベル (最新バーで描き直し) ----------------
